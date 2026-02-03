@@ -67,10 +67,11 @@ The project currently uses Apple Container (macOS-only). We need:
 
 ## Vision
 
-A personal Claude assistant accessible via WhatsApp, with minimal custom code.
+A personal Claude or Codex assistant accessible via WhatsApp, with minimal custom code.
 
 **Core components:**
-- **Claude Agent SDK** as the core agent
+- **Claude Agent SDK** as the default core agent
+- **OpenAI Codex** as an optional provider (per-group)
 - **Apple Container** for isolated agent execution (Linux VMs)
 - **WhatsApp** as the primary I/O channel
 - **Persistent memory** per conversation and globally

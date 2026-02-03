@@ -15,8 +15,9 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 7. [Commands](#commands)
 8. [Scheduled Tasks](#scheduled-tasks)
 9. [MCP Servers](#mcp-servers)
-10. [Deployment](#deployment)
-11. [Security Considerations](#security-considerations)
+10. [Codex Tools (Filesystem IPC)](#codex-tools-filesystem-ipc)
+11. [Deployment](#deployment)
+12. [Security Considerations](#security-considerations)
 
 ---
 
@@ -55,6 +56,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 │  │    • groups/{name}/ → /workspace/group                         │   │
 │  │    • groups/global/ → /workspace/global/ (non-main only)        │   │
 │  │    • data/sessions/{group}/.claude/ → /home/node/.claude/      │   │
+│  │    • data/codex/{group}/.codex/ → /home/node/.codex/           │   │
 │  │    • Additional dirs → /workspace/extra/*                      │   │
 │  │                                                                │   │
 │  │  Tools (all groups):                                           │   │
@@ -149,6 +151,7 @@ nanoclaw/
 │   ├── registered_groups.json     # Group JID → folder mapping
 │   ├── router_state.json          # Last processed timestamp + last agent timestamps
 │   ├── env/env                    # Copy of .env for container mounting
+│   ├── codex/                      # Per-group Codex config/auth (.codex)
 │   └── ipc/                       # Container IPC (messages/, tasks/)
 │
 ├── logs/                          # Runtime logs (gitignored)
@@ -200,6 +203,13 @@ Groups can have additional directories mounted via `containerConfig` in `data/re
     "folder": "dev-team",
     "trigger": "@Andy",
     "added_at": "2026-01-31T12:00:00Z",
+    "provider": "codex",
+    "providerConfig": {
+      "codex": {
+        "approvalPolicy": "auto",
+        "authMethod": "chatgpt"
+      }
+    },
     "containerConfig": {
       "additionalMounts": [
         {
@@ -215,6 +225,8 @@ Groups can have additional directories mounted via `containerConfig` in `data/re
 ```
 
 Additional mounts appear at `/workspace/extra/{containerPath}` inside the container.
+
+Groups default to `provider: "claude"` if unset. Codex uses the per-group config directory at `data/codex/{group}/.codex` mounted to `/home/node/.codex`.
 
 **Apple Container mount syntax note:** Read-write mounts use `-v host:container`, but readonly mounts require `--mount "type=bind,source=...,target=...,readonly"` (the `:ro` suffix doesn't work).
 
@@ -233,7 +245,19 @@ The token can be extracted from `~/.claude/.credentials.json` if you're logged i
 ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
-Only the authentication variables (`CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`) are extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
+Only the authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `OPENAI_API_KEY`) are extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
+
+### Codex-Only Setup (No Claude Code)
+
+If you do not use Claude Code, run the Codex-compatible setup script:
+
+```bash
+npm run setup:codex
+```
+
+This installs dependencies, checks the container runtime, builds the image, offers Codex login, and runs WhatsApp authentication.
+
+Codex skills for NanoClaw live in `.codex/skills` and can be run via `/skills` then `$setup`, `$customize`, or `$debug`.
 
 ### Changing the Assistant Name
 
@@ -474,6 +498,28 @@ The `nanoclaw` MCP server is created dynamically per agent call with the current
 | `resume_task` | Resume a paused task |
 | `cancel_task` | Delete a task |
 | `send_message` | Send a WhatsApp message to the group |
+
+---
+
+## Codex Tools (Filesystem IPC)
+
+Codex uses filesystem IPC instead of MCP tools. It must write JSON files into the mounted IPC directories.
+
+**Send a message**
+
+Write a JSON file to `/workspace/ipc/messages`:
+
+```json
+{"type":"message","chatJid":"1234567890@g.us","text":"Hello from Codex"}
+```
+
+**Schedule a task**
+
+Write a JSON file to `/workspace/ipc/tasks`:
+
+```json
+{"type":"schedule_task","prompt":"Daily standup summary","schedule_type":"cron","schedule_value":"0 9 * * 1-5","context_mode":"group","groupFolder":"team-chat"}
+```
 
 ---
 

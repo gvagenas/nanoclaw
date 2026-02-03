@@ -3,6 +3,7 @@
  * Runs inside a container, receives config via stdin, outputs result to stdout
  */
 
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
@@ -15,6 +16,13 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  provider?: 'claude' | 'codex';
+  providerConfig?: {
+    codex?: {
+      approvalPolicy?: 'auto' | 'readonly' | 'full';
+      authMethod?: 'chatgpt' | 'api_key';
+    };
+  };
 }
 
 interface ContainerOutput {
@@ -200,6 +208,158 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   return lines.join('\n');
 }
 
+function readFileIfExists(filePath: string): string | null {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    log(`Failed to read ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+function buildCodexPrelude(input: ContainerInput): string {
+  const sections: string[] = [];
+
+  sections.push(
+    'You are NanoClaw, a WhatsApp assistant running inside a container.',
+    'Use filesystem IPC for tools. Ignore any MCP tool references.',
+  );
+
+  sections.push(
+    'Filesystem IPC tools:',
+    '- Send a message by writing a JSON file to /workspace/ipc/messages.',
+    '- Schedule a task by writing a JSON file to /workspace/ipc/tasks.',
+    'Examples:',
+    '{"type":"message","chatJid":"<jid>","text":"Hello"}',
+    '{"type":"schedule_task","prompt":"...","schedule_type":"cron|interval|once","schedule_value":"...","context_mode":"group|isolated","groupFolder":"..."}',
+  );
+
+  const memoryFiles: Array<{ label: string; path: string }> = [];
+  if (input.isMain) {
+    memoryFiles.push(
+      { label: 'Global Memory', path: '/workspace/project/groups/CLAUDE.md' },
+      { label: 'Group Memory', path: '/workspace/group/CLAUDE.md' },
+    );
+  } else {
+    memoryFiles.push(
+      { label: 'Global Memory', path: '/workspace/global/CLAUDE.md' },
+      { label: 'Group Memory', path: '/workspace/group/CLAUDE.md' },
+    );
+  }
+
+  for (const file of memoryFiles) {
+    const content = readFileIfExists(file.path);
+    if (content) {
+      sections.push(`\n[${file.label}]\n${content}`);
+    }
+  }
+
+  return sections.join('\n');
+}
+
+function ensureCodexConfig(input: ContainerInput): void {
+  const configDir = '/home/node/.codex';
+  const configPath = path.join(configDir, 'config.toml');
+  fs.mkdirSync(configDir, { recursive: true });
+  if (fs.existsSync(configPath)) return;
+
+  const approvalPolicy =
+    input.providerConfig?.codex?.approvalPolicy || 'auto';
+  const authMethod =
+    input.providerConfig?.codex?.authMethod || 'chatgpt';
+
+  const content = [
+    `approval_policy = "${approvalPolicy}"`,
+    `preferred_auth_method = "${authMethod}"`,
+    '',
+  ].join('\n');
+
+  fs.writeFileSync(configPath, content);
+}
+
+function verifyCodexAuth(input: ContainerInput): string | null {
+  const authPath = '/home/node/.codex/auth.json';
+  const hasAuthFile = fs.existsSync(authPath);
+  const hasApiKey = !!process.env.OPENAI_API_KEY;
+  const preferredAuth = input.providerConfig?.codex?.authMethod || 'chatgpt';
+
+  if (preferredAuth === 'api_key' && !hasApiKey) {
+    return 'Codex auth missing: OPENAI_API_KEY is required but not set.';
+  }
+
+  if (!hasAuthFile && !hasApiKey) {
+    return 'Codex auth missing: run `codex login` on the host or set OPENAI_API_KEY.';
+  }
+
+  return null;
+}
+
+async function runCodex(input: ContainerInput): Promise<ContainerOutput> {
+  const prelude = buildCodexPrelude(input);
+  let prompt = `${prelude}\n\n${input.prompt}`;
+
+  if (input.isScheduledTask) {
+    prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use filesystem IPC to communicate with the user.]\n\n${prompt}`;
+  }
+
+  ensureCodexConfig(input);
+  const authError = verifyCodexAuth(input);
+  if (authError) {
+    return {
+      status: 'error',
+      result: null,
+      error: authError,
+    };
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn('codex', ['exec'], {
+      cwd: '/workspace/group',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve({
+          status: 'error',
+          result: null,
+          error: `Codex exited with code ${code}: ${stderr.trim().slice(-500)}`,
+        });
+        return;
+      }
+
+      const result = stdout.trim();
+      resolve({
+        status: 'success',
+        result: result || null,
+      });
+    });
+
+    child.on('error', (err) => {
+      resolve({
+        status: 'error',
+        result: null,
+        error: `Failed to start codex exec: ${err.message}`,
+      });
+    });
+
+    child.stdin.write(prompt);
+    child.stdin.end();
+  });
+}
+
 async function main(): Promise<void> {
   let input: ContainerInput;
 
@@ -214,6 +374,16 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
     });
     process.exit(1);
+  }
+
+  const provider = input.provider || 'claude';
+  if (provider === 'codex') {
+    const output = await runCodex(input);
+    writeOutput(output);
+    if (output.status === 'error') {
+      process.exit(1);
+    }
+    return;
   }
 
   const ipcMcp = createIpcMcp({

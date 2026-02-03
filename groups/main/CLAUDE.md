@@ -115,7 +115,14 @@ Groups are registered in `/workspace/project/data/registered_groups.json`:
     "name": "Family Chat",
     "folder": "family-chat",
     "trigger": "@Andy",
-    "added_at": "2024-01-31T12:00:00.000Z"
+    "added_at": "2024-01-31T12:00:00.000Z",
+    "provider": "claude",
+    "providerConfig": {
+      "codex": {
+        "approvalPolicy": "auto",
+        "authMethod": "chatgpt"
+      }
+    }
   }
 }
 ```
@@ -126,6 +133,10 @@ Fields:
 - **folder**: Folder name under `groups/` for this group's files and memory
 - **trigger**: The trigger word (usually same as global, but could differ)
 - **added_at**: ISO timestamp when registered
+- **provider**: `claude` (default) or `codex`
+- **providerConfig**: Provider-specific settings (Codex approval/auth options)
+
+Note: `codex` uses filesystem IPC (write JSON to `/workspace/ipc/...`) instead of MCP tools.
 
 ### Adding a Group
 

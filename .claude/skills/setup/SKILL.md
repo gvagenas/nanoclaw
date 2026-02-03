@@ -9,6 +9,8 @@ Run all commands automatically. Only pause when user action is required (scannin
 
 **UX Note:** When asking the user questions, prefer using the `AskUserQuestion` tool instead of just outputting text. This integrates with Claude's built-in question/answer system for a better experience.
 
+**Codex-only users:** If the user does not have Claude Code, direct them to run `npm run setup:codex` from the repo root instead of using this skill.
+
 ## 1. Install Dependencies
 
 ```bash
@@ -116,6 +118,32 @@ Tell the user to add their key from https://console.anthropic.com/
 KEY=$(grep "^ANTHROPIC_API_KEY=" .env | cut -d= -f2)
 [ -n "$KEY" ] && echo "API key configured: ${KEY:0:10}...${KEY: -4}" || echo "Missing"
 ```
+
+## 3b. Configure Codex Authentication (Optional)
+
+If the user wants to enable the Codex provider, offer these options:
+
+**Option 1: ChatGPT subscription login (recommended)**
+
+Tell the user:
+> Run the following on the host:
+> ```
+> codex login
+> ```
+> This opens a browser flow. After login, copy the auth file into the main group:
+> ```
+> mkdir -p data/codex/main/.codex
+> cp ~/.codex/auth.json data/codex/main/.codex/auth.json
+> ```
+
+**Option 2: API key fallback**
+
+Tell the user to add this to `.env`:
+```
+OPENAI_API_KEY=sk-...
+```
+
+Note: Codex will error on first run if no auth file is present and `OPENAI_API_KEY` is not set.
 
 ## 4. Build Container Image
 

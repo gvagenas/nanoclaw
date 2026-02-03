@@ -56,6 +56,19 @@ let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 
+function normalizeRegisteredGroups(
+  groups: Record<string, RegisteredGroup>,
+): Record<string, RegisteredGroup> {
+  const normalized: Record<string, RegisteredGroup> = {};
+  for (const [jid, group] of Object.entries(groups)) {
+    normalized[jid] = {
+      ...group,
+      provider: group.provider || 'claude',
+    };
+  }
+  return normalized;
+}
+
 async function setTyping(jid: string, isTyping: boolean): Promise<void> {
   try {
     await sock.sendPresenceUpdate(isTyping ? 'composing' : 'paused', jid);
@@ -73,9 +86,8 @@ function loadState(): void {
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
-  registeredGroups = loadJson(
-    path.join(DATA_DIR, 'registered_groups.json'),
-    {},
+  registeredGroups = normalizeRegisteredGroups(
+    loadJson(path.join(DATA_DIR, 'registered_groups.json'), {}),
   );
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
@@ -248,6 +260,8 @@ async function runAgent(
       groupFolder: group.folder,
       chatJid,
       isMain,
+      provider: group.provider,
+      providerConfig: group.providerConfig,
     });
 
     if (output.newSessionId) {
@@ -411,6 +425,8 @@ async function processTaskIpc(
     folder?: string;
     trigger?: string;
     containerConfig?: RegisteredGroup['containerConfig'];
+    provider?: RegisteredGroup['provider'];
+    providerConfig?: RegisteredGroup['providerConfig'];
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -613,6 +629,8 @@ async function processTaskIpc(
           trigger: data.trigger,
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
+          provider: data.provider || 'claude',
+          providerConfig: data.providerConfig,
         });
       } else {
         logger.warn(

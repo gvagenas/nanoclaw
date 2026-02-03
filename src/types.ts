@@ -39,6 +39,13 @@ export interface RegisteredGroup {
   trigger: string;
   added_at: string;
   containerConfig?: ContainerConfig;
+  provider?: 'claude' | 'codex';
+  providerConfig?: {
+    codex?: {
+      approvalPolicy?: 'auto' | 'readonly' | 'full';
+      authMethod?: 'chatgpt' | 'api_key';
+    };
+  };
 }
 
 export interface Session {

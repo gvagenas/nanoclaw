@@ -44,6 +44,8 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  provider?: RegisteredGroup['provider'];
+  providerConfig?: RegisteredGroup['providerConfig'];
 }
 
 export interface ContainerOutput {
@@ -116,6 +118,15 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Per-group Codex config directory (isolated from other groups)
+  const groupCodexDir = path.join(DATA_DIR, 'codex', group.folder, '.codex');
+  fs.mkdirSync(groupCodexDir, { recursive: true });
+  mounts.push({
+    hostPath: groupCodexDir,
+    containerPath: '/home/node/.codex',
+    readonly: false,
+  });
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
@@ -134,7 +145,11 @@ function buildVolumeMounts(
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
+    const allowedVars = [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+    ];
     const filteredLines = envContent.split('\n').filter((line) => {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) return false;

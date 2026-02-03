@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  My personal Claude assistant that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
+  My personal Claude or Codex assistant that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
 </p>
 
 ## Why I Built This
@@ -22,6 +22,23 @@ claude
 
 Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup, service configuration.
 
+### Codex-Only Setup (No Claude Code)
+
+If you only have ChatGPT/Codex and not Claude Code, run:
+
+```bash
+git clone https://github.com/gavrielc/nanoclaw.git
+cd nanoclaw
+npm run setup:codex
+```
+
+This guides you through installing dependencies, building the container image, optional Codex login, and WhatsApp authentication.
+
+Codex also supports repo-scoped skills. NanoClaw includes Codex skills under `.codex/skills` so you can run setup/customize/debug directly in Codex:
+- List skills with `/skills`
+- Invoke with `$setup`, `$customize`, or `$debug`
+- Restart Codex after adding new skills
+
 ## Philosophy
 
 **Small enough to understand.** One process, a few source files. No microservices, no message queues, no abstraction layers. Have Claude Code walk you through it.
@@ -36,7 +53,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 **Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
 
-**Best harness, best model.** This runs on Claude Agent SDK, which means you're running Claude Code directly. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
+**Best harness, best model.** This runs on Claude Agent SDK by default and can also run OpenAI Codex. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
 
 **No ToS gray areas.** Because it uses Claude Agent SDK natively with no hacks or workarounds, using your subscription with your auth token is completely legitimate (I think). No risk of being shut down for terms of service violations (I am not a lawyer).
 
@@ -44,6 +61,7 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 - **WhatsApp I/O** - Message Claude from your phone
 - **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
+- **Provider choice per group** - `claude` (default) or `codex`
 - **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
 - **Scheduled tasks** - Recurring jobs that run Claude and can message you back
 - **Web access** - Search and fetch content
@@ -109,11 +127,12 @@ Skills we'd love to see:
 - Node.js 20+
 - [Claude Code](https://claude.ai/download)
 - [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+- Optional: [OpenAI Codex CLI](https://github.com/openai/codex) on the host if you want ChatGPT subscription login for Codex
 
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK or Codex) --> Response
 ```
 
 Single Node.js process. Agents execute in isolated Linux containers with mounted directories. IPC via filesystem. No daemons, no queues, no complexity.
@@ -125,7 +144,37 @@ Key files:
 - `src/db.ts` - SQLite operations
 - `groups/*/CLAUDE.md` - Per-group memory
 
+## Providers
+
+By default, groups use `claude`. You can opt into `codex` per group by setting the `provider` field in `data/registered_groups.json`:
+
+```json
+{
+  "1234567890@g.us": {
+    "name": "Dev Team",
+    "folder": "dev-team",
+    "trigger": "@Andy",
+    "added_at": "2026-02-03T12:00:00Z",
+    "provider": "codex",
+    "providerConfig": {
+      "codex": {
+        "approvalPolicy": "auto",
+        "authMethod": "chatgpt"
+      }
+    }
+  }
+}
+```
+
+**Codex auth options:**
+- **ChatGPT subscription (recommended):** run `codex login` on the host and copy `~/.codex/auth.json` to `data/codex/main/.codex/auth.json`.
+- **API key fallback:** set `OPENAI_API_KEY` in `.env`.
+
 ## FAQ
+
+**Why doesn’t `/setup` work in Codex?**
+
+`/setup` is a Claude Code skill, not a general shell command. It only exists inside the Claude Code app/CLI, so the Codex CLI doesn’t know about it. For Codex-only users, use `npm run setup:codex`, which provides an equivalent guided setup in your terminal.
 
 **Why WhatsApp and not Telegram/Signal/etc?**
 
