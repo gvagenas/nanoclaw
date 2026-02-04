@@ -56,6 +56,13 @@ let sessions: Session = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 
+function normalizeRegisteredGroup(group: RegisteredGroup): RegisteredGroup {
+  if (!group.provider) {
+    return { ...group, provider: 'claude' };
+  }
+  return group;
+}
+
 async function setTyping(jid: string, isTyping: boolean): Promise<void> {
   try {
     await sock.sendPresenceUpdate(isTyping ? 'composing' : 'paused', jid);
@@ -73,10 +80,18 @@ function loadState(): void {
   lastTimestamp = state.last_timestamp || '';
   lastAgentTimestamp = state.last_agent_timestamp || {};
   sessions = loadJson(path.join(DATA_DIR, 'sessions.json'), {});
-  registeredGroups = loadJson(
-    path.join(DATA_DIR, 'registered_groups.json'),
-    {},
-  );
+  registeredGroups = loadJson(path.join(DATA_DIR, 'registered_groups.json'), {});
+  let updated = false;
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    const normalized = normalizeRegisteredGroup(group);
+    if (normalized !== group) {
+      registeredGroups[jid] = normalized;
+      updated = true;
+    }
+  }
+  if (updated) {
+    saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
+  }
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',
@@ -92,7 +107,7 @@ function saveState(): void {
 }
 
 function registerGroup(jid: string, group: RegisteredGroup): void {
-  registeredGroups[jid] = group;
+  registeredGroups[jid] = normalizeRegisteredGroup(group);
   saveJson(path.join(DATA_DIR, 'registered_groups.json'), registeredGroups);
 
   // Create group folder
@@ -248,6 +263,8 @@ async function runAgent(
       groupFolder: group.folder,
       chatJid,
       isMain,
+      provider: group.provider ?? 'claude',
+      providerConfig: group.providerConfig,
     });
 
     if (output.newSessionId) {
@@ -410,6 +427,8 @@ async function processTaskIpc(
     name?: string;
     folder?: string;
     trigger?: string;
+    provider?: RegisteredGroup['provider'];
+    providerConfig?: RegisteredGroup['providerConfig'];
     containerConfig?: RegisteredGroup['containerConfig'];
   },
   sourceGroup: string, // Verified identity from IPC directory
@@ -612,6 +631,8 @@ async function processTaskIpc(
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
+          provider: data.provider,
+          providerConfig: data.providerConfig,
           containerConfig: data.containerConfig,
         });
       } else {

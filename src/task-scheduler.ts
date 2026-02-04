@@ -98,6 +98,8 @@ async function runTask(
       chatJid: task.chat_jid,
       isMain,
       isScheduledTask: true,
+      provider: group.provider ?? 'claude',
+      providerConfig: group.providerConfig,
     });
 
     if (output.status === 'error') {

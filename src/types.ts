@@ -33,11 +33,24 @@ export interface ContainerConfig {
   env?: Record<string, string>;
 }
 
+export type Provider = 'claude' | 'codex';
+
+export interface CodexProviderConfig {
+  approvalPolicy?: 'auto' | 'readonly' | 'full';
+  authMethod?: 'chatgpt' | 'api_key';
+}
+
+export interface ProviderConfig {
+  codex?: CodexProviderConfig;
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
   trigger: string;
   added_at: string;
+  provider?: Provider;
+  providerConfig?: ProviderConfig;
   containerConfig?: ContainerConfig;
 }
 

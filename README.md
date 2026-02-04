@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  My personal Claude assistant that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
+  My personal assistant (Claude or Codex) that runs securely in containers. Lightweight and built to be understood and customized for your own needs.
 </p>
 
 ## Why I Built This
@@ -17,10 +17,10 @@ NanoClaw gives you the same core functionality in a codebase you can understand 
 ```bash
 git clone https://github.com/gavrielc/nanoclaw.git
 cd nanoclaw
-claude
+claude   # or: codex
 ```
 
-Then run `/setup`. Claude Code handles everything: dependencies, authentication, container setup, service configuration.
+Then run `/setup` (Claude) or `$setup` (Codex). The setup skill handles dependencies, authentication, container setup, and service configuration.
 
 ## Philosophy
 
@@ -32,9 +32,9 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 **Customization = code changes.** No configuration sprawl. Want different behavior? Modify the code. The codebase is small enough that this is safe.
 
-**AI-native.** No installation wizard; Claude Code guides setup. No monitoring dashboard; ask Claude what's happening. No debugging tools; describe the problem, Claude fixes it.
+**AI-native.** No installation wizard; Claude Code or Codex guides setup. No monitoring dashboard; ask the assistant what's happening. No debugging tools; describe the problem, the assistant fixes it.
 
-**Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute [claude code skills](https://code.claude.com/docs/en/skills) like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
+**Skills over features.** Contributors shouldn't add features (e.g. support for Telegram) to the codebase. Instead, they contribute skills like `/add-telegram` that transform your fork. You end up with clean code that does exactly what you need.
 
 **Best harness, best model.** This runs on Claude Agent SDK, which means you're running Claude Code directly. The harness matters. A bad harness makes even smart models seem dumb, a good harness gives them superpowers. Claude Code is (IMO) the best harness available.
 
@@ -42,13 +42,14 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 
 ## What It Supports
 
-- **WhatsApp I/O** - Message Claude from your phone
+- **WhatsApp I/O** - Message the assistant from your phone
 - **Isolated group context** - Each group has its own `CLAUDE.md` memory, isolated filesystem, and runs in its own container sandbox with only that filesystem mounted
 - **Main channel** - Your private channel (self-chat) for admin control; every other group is completely isolated
-- **Scheduled tasks** - Recurring jobs that run Claude and can message you back
+- **Scheduled tasks** - Recurring jobs that run the agent and can message you back
 - **Web access** - Search and fetch content
 - **Container isolation** - Agents sandboxed in Apple Container (macOS) or Docker (macOS/Linux)
 - **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
+- **Provider choice** - Per-group Claude or Codex provider selection (see `docs/CODEX.md`)
 
 ## Usage
 
@@ -69,7 +70,7 @@ From the main channel (your self-chat), you can manage groups and tasks:
 
 ## Customizing
 
-There are no configuration files to learn. Just tell Claude Code what you want:
+There are no configuration files to learn. Just tell Claude Code or Codex what you want:
 
 - "Change the trigger word to @Bob"
 - "Remember in the future to make responses shorter and more direct"
@@ -78,13 +79,13 @@ There are no configuration files to learn. Just tell Claude Code what you want:
 
 Or run `/customize` for guided changes.
 
-The codebase is small enough that Claude can safely modify it.
+The codebase is small enough that the assistant can safely modify it.
 
 ## Contributing
 
 **Don't add features. Add skills.**
 
-If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (`.claude/skills/add-telegram/SKILL.md`) that teaches Claude Code how to transform a NanoClaw installation to use Telegram.
+If you want to add Telegram support, don't create a PR that adds Telegram alongside WhatsApp. Instead, contribute a skill file (e.g. `.claude/skills/add-telegram/SKILL.md` or `.codex/skills/add-telegram/SKILL.md`) that teaches the assistant how to transform a NanoClaw installation to use Telegram.
 
 Users then run `/add-telegram` on their fork and get clean code that does exactly what they need, not a bloated system trying to support every use case.
 
@@ -107,13 +108,13 @@ Skills we'd love to see:
 
 - macOS or Linux
 - Node.js 20+
-- [Claude Code](https://claude.ai/download)
+- [Claude Code](https://claude.ai/download) or Codex CLI (see `docs/CODEX.md`)
 - [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
 
 ## Architecture
 
 ```
-WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK) --> Response
+WhatsApp (baileys) --> SQLite --> Polling loop --> Container (Claude Agent SDK or Codex CLI) --> Response
 ```
 
 Single Node.js process. Agents execute in isolated Linux containers with mounted directories. IPC via filesystem. No daemons, no queues, no complexity.
@@ -123,6 +124,7 @@ Key files:
 - `src/container-runner.ts` - Spawns agent containers
 - `src/task-scheduler.ts` - Runs scheduled tasks
 - `src/db.ts` - SQLite operations
+- `groups/global/CLAUDE.md` - Global memory
 - `groups/*/CLAUDE.md` - Per-group memory
 
 ## FAQ
@@ -153,7 +155,7 @@ Ask Claude Code. "Why isn't the scheduler running?" "What's in the recent logs?"
 
 **Why isn't the setup working for me?**
 
-I don't know. Run `claude`, then run `/debug`. If claude finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
+I don't know. Run `claude` (or `codex`), then run `/debug` (or `$debug`). If the assistant finds an issue that is likely affecting other users, open a PR to modify the setup SKILL.md.
 
 **What changes will be accepted into the codebase?**
 

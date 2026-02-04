@@ -1,6 +1,6 @@
 # NanoClaw Specification
 
-A personal Claude assistant accessible via WhatsApp, with persistent memory per conversation, scheduled tasks, and email integration.
+A personal assistant accessible via WhatsApp (Claude or Codex providers), with persistent memory per conversation, scheduled tasks, and email integration.
 
 ---
 
@@ -55,6 +55,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 │  │    • groups/{name}/ → /workspace/group                         │   │
 │  │    • groups/global/ → /workspace/global/ (non-main only)        │   │
 │  │    • data/sessions/{group}/.claude/ → /home/node/.claude/      │   │
+│  │    • data/codex/{group}/.codex/ → /home/node/.codex/ (Codex)   │   │
 │  │    • Additional dirs → /workspace/extra/*                      │   │
 │  │                                                                │   │
 │  │  Tools (all groups):                                           │   │
@@ -77,6 +78,7 @@ A personal Claude assistant accessible via WhatsApp, with persistent memory per 
 | Message Storage | SQLite (better-sqlite3) | Store messages for polling |
 | Container Runtime | Apple Container | Isolated Linux VMs for agent execution |
 | Agent | @anthropic-ai/claude-agent-sdk (0.2.29) | Run Claude with tools and MCP servers |
+| Agent (Codex) | Codex CLI | Run Codex in non-interactive exec mode |
 | Browser Automation | agent-browser + Chromium | Web interaction and screenshots |
 | Runtime | Node.js 20+ | Host process for routing and scheduling |
 
@@ -108,7 +110,7 @@ nanoclaw/
 │   └── container-runner.ts        # Spawns agents in Apple Containers
 │
 ├── container/
-│   ├── Dockerfile                 # Container image (runs as 'node' user, includes Claude Code CLI)
+│   ├── Dockerfile                 # Container image (runs as 'node' user, includes Claude Code + Codex CLI)
 │   ├── build.sh                   # Build script for container image
 │   ├── agent-runner/              # Code that runs inside the container
 │   │   ├── package.json
@@ -130,8 +132,18 @@ nanoclaw/
 │       └── debug/
 │           └── SKILL.md           # /debug skill (container debugging)
 │
+├── .codex/
+│   └── skills/
+│       ├── setup/
+│       │   └── SKILL.md           # $setup skill (Codex)
+│       ├── customize/
+│       │   └── SKILL.md           # $customize skill (Codex)
+│       └── debug/
+│           └── SKILL.md           # $debug skill (Codex)
+│
 ├── groups/
-│   ├── CLAUDE.md                  # Global memory (all groups read this)
+│   ├── global/
+│   │   └── CLAUDE.md              # Global memory (all groups read this)
 │   ├── main/                      # Self-chat (main control channel)
 │   │   ├── CLAUDE.md              # Main channel memory
 │   │   └── logs/                  # Task execution logs
@@ -200,6 +212,13 @@ Groups can have additional directories mounted via `containerConfig` in `data/re
     "folder": "dev-team",
     "trigger": "@Andy",
     "added_at": "2026-01-31T12:00:00Z",
+    "provider": "claude",
+    "providerConfig": {
+      "codex": {
+        "approvalPolicy": "auto",
+        "authMethod": "chatgpt"
+      }
+    },
     "containerConfig": {
       "additionalMounts": [
         {
@@ -218,22 +237,27 @@ Additional mounts appear at `/workspace/extra/{containerPath}` inside the contai
 
 **Apple Container mount syntax note:** Read-write mounts use `-v host:container`, but readonly mounts require `--mount "type=bind,source=...,target=...,readonly"` (the `:ro` suffix doesn't work).
 
-### Claude Authentication
+### Provider Authentication
 
-Configure authentication in a `.env` file in the project root. Two options:
+Configure authentication in a `.env` file in the project root. Options depend on provider:
 
-**Option 1: Claude Subscription (OAuth token)**
+**Claude Option 1: Claude Subscription (OAuth token)**
 ```bash
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 The token can be extracted from `~/.claude/.credentials.json` if you're logged in to Claude Code.
 
-**Option 2: Pay-per-use API Key**
+**Claude Option 2: Pay-per-use API Key**
 ```bash
 ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
-Only the authentication variables (`CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY`) are extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
+**Codex Option: OpenAI API Key**
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+Only the authentication variables (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`) are extracted from `.env` and mounted into the container at `/workspace/env-dir/env`, then sourced by the entrypoint script. This ensures other environment variables in `.env` are not exposed to the agent. This workaround is needed because Apple Container loses `-e` environment variables when using `-i` (interactive mode with piped stdin).
 
 ### Changing the Assistant Name
 
@@ -264,9 +288,11 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
 
 | Level | Location | Read By | Written By | Purpose |
 |-------|----------|---------|------------|---------|
-| **Global** | `groups/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
+| **Global** | `groups/global/CLAUDE.md` | All groups | Main only | Preferences, facts, context shared across all conversations |
 | **Group** | `groups/{name}/CLAUDE.md` | That group | That group | Group-specific context, conversation memory |
 | **Files** | `groups/{name}/*.md` | That group | That group | Notes, research, documents created during conversation |
+
+Global memory lives at `groups/global/CLAUDE.md` and is mounted into non-main containers at `/workspace/global/CLAUDE.md`. Main containers can read it from the full project mount at `/workspace/project/groups/global/CLAUDE.md`.
 
 ### How Memory Works
 
@@ -275,6 +301,7 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
    - Claude Agent SDK with `settingSources: ['project']` automatically loads:
      - `../CLAUDE.md` (parent directory = global memory)
      - `./CLAUDE.md` (current directory = group memory)
+   - Codex loads memory by explicit prelude injection (see `docs/CODEX.md`)
 
 2. **Writing Memory**
    - When user says "remember this", agent writes to `./CLAUDE.md`
@@ -286,6 +313,14 @@ NanoClaw uses a hierarchical memory system based on CLAUDE.md files.
    - Main can manage registered groups and schedule tasks for any group
    - Main can configure additional directory mounts for any group
    - All groups have Bash access (safe because it runs inside container)
+
+---
+
+## Codex Provider
+
+NanoClaw supports an optional **Codex** provider alongside Claude. Codex runs in non-interactive `codex exec` mode with filesystem IPC and explicit memory injection.
+
+See `docs/CODEX.md` for authentication, skills, and provider configuration.
 
 ---
 

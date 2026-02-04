@@ -44,6 +44,8 @@ export interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  provider?: RegisteredGroup['provider'];
+  providerConfig?: RegisteredGroup['providerConfig'];
 }
 
 export interface ContainerOutput {
@@ -64,6 +66,7 @@ function buildVolumeMounts(
   isMain: boolean,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
+  const provider = group.provider ?? 'claude';
   const homeDir = getHomeDir();
   const projectRoot = process.cwd();
 
@@ -116,6 +119,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  if (provider === 'codex') {
+    const groupCodexDir = path.join(DATA_DIR, 'codex', group.folder, '.codex');
+    fs.mkdirSync(groupCodexDir, { recursive: true });
+    mounts.push({
+      hostPath: groupCodexDir,
+      containerPath: '/home/node/.codex',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = path.join(DATA_DIR, 'ipc', group.folder);
@@ -128,18 +141,35 @@ function buildVolumeMounts(
   });
 
   // Environment file directory (workaround for Apple Container -i env var bug)
-  // Only expose specific auth variables needed by Claude Code, not the entire .env
+  // Only expose specific auth variables needed by Claude/Codex, not the entire .env
   const envDir = path.join(DATA_DIR, 'env');
   fs.mkdirSync(envDir, { recursive: true });
   const envFile = path.join(projectRoot, '.env');
   if (fs.existsSync(envFile)) {
     const envContent = fs.readFileSync(envFile, 'utf-8');
-    const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-    const filteredLines = envContent.split('\n').filter((line) => {
+    const allowedVars = [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'CODEX_API_KEY',
+    ];
+    const envVars: Record<string, string> = {};
+    for (const line of envContent.split('\n')) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return false;
-      return allowedVars.some((v) => trimmed.startsWith(`${v}=`));
-    });
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const [key, ...rest] = trimmed.split('=');
+      if (allowedVars.includes(key) && rest.length > 0) {
+        envVars[key] = rest.join('=');
+      }
+    }
+
+    if (envVars.OPENAI_API_KEY && !envVars.CODEX_API_KEY) {
+      envVars.CODEX_API_KEY = envVars.OPENAI_API_KEY;
+    }
+
+    const filteredLines = allowedVars
+      .filter((key) => envVars[key])
+      .map((key) => `${key}=${envVars[key]}`);
 
     if (filteredLines.length > 0) {
       fs.writeFileSync(

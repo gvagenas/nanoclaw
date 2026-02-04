@@ -29,8 +29,8 @@ RUN apt-get update && apt-get install -y \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+# Install agent-browser, claude-code, and codex CLI globally
+RUN npm install -g agent-browser @anthropic-ai/claude-code @openai/codex
 
 # Create app directory
 WORKDIR /app
@@ -62,6 +62,9 @@ USER node
 
 # Set working directory to group workspace
 WORKDIR /workspace/group
+
+# Codex config home (mounted per-group when using Codex provider)
+ENV CODEX_HOME=/home/node/.codex
 
 # Entry point reads JSON from stdin, outputs JSON to stdout
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -3,6 +3,7 @@
  * Runs inside a container, receives config via stdin, outputs result to stdout
  */
 
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
@@ -15,6 +16,13 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  provider?: 'claude' | 'codex';
+  providerConfig?: {
+    codex?: {
+      approvalPolicy?: 'auto' | 'readonly' | 'full';
+      authMethod?: 'chatgpt' | 'api_key';
+    };
+  };
 }
 
 interface ContainerOutput {
@@ -200,6 +208,222 @@ function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | nu
   return lines.join('\n');
 }
 
+function readFileIfExists(filePath: string): string | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return fs.readFileSync(filePath, 'utf-8').trim();
+  } catch (err) {
+    log(`Failed to read file ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+function ensureClaudeGlobalMemoryFile(input: ContainerInput): void {
+  const globalPath = input.isMain
+    ? '/workspace/project/groups/global/CLAUDE.md'
+    : '/workspace/global/CLAUDE.md';
+  const targetPath = '/workspace/CLAUDE.md';
+
+  try {
+    if (!fs.existsSync(globalPath)) return;
+    const content = fs.readFileSync(globalPath, 'utf-8');
+    if (fs.existsSync(targetPath)) {
+      const existing = fs.readFileSync(targetPath, 'utf-8');
+      if (existing === content) return;
+    }
+    fs.writeFileSync(targetPath, content);
+  } catch (err) {
+    log(`Failed to prepare Claude global memory file: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function buildCodexPrelude(input: ContainerInput): string {
+  const lines: string[] = [];
+  lines.push('You are NanoClaw, an assistant operating in WhatsApp.');
+  lines.push('Respond with plain text only.');
+  lines.push('');
+  lines.push('## Tools (Filesystem IPC)');
+  lines.push('To send a message, write a JSON file to `/workspace/ipc/messages/`.');
+  lines.push('Example: {"type":"message","chatJid":"<jid>","text":"hello"}');
+  lines.push('To schedule tasks, write a JSON file to `/workspace/ipc/tasks/`.');
+  lines.push('Example: {"type":"schedule_task","prompt":"...","schedule_type":"cron","schedule_value":"0 9 * * 1","groupFolder":"<group-folder>","context_mode":"isolated"}');
+  lines.push('');
+  lines.push('## Skills');
+  lines.push('If the user asks for `/setup`, treat it as a request to run the `$setup` skill.');
+  lines.push('');
+  lines.push('## Memory');
+
+  const globalPath = input.isMain
+    ? '/workspace/project/groups/global/CLAUDE.md'
+    : '/workspace/global/CLAUDE.md';
+  const groupPath = '/workspace/group/CLAUDE.md';
+  const globalMemory = readFileIfExists(globalPath);
+  const groupMemory = readFileIfExists(groupPath);
+
+  if (globalMemory) {
+    lines.push('### Global Memory');
+    lines.push(globalMemory);
+    lines.push('');
+  }
+
+  if (groupMemory) {
+    lines.push('### Group Memory');
+    lines.push(groupMemory);
+    lines.push('');
+  }
+
+  if (!globalMemory && !groupMemory) {
+    lines.push('No memory files found.');
+    lines.push('');
+  }
+
+  lines.push('## Memory Updates');
+  lines.push('If the user says "remember this", update `/workspace/group/CLAUDE.md`.');
+  if (input.isMain) {
+    lines.push('If the user says "remember this globally", update `/workspace/project/groups/global/CLAUDE.md`.');
+  } else {
+    lines.push('Never write to global memory in non-main groups.');
+  }
+
+  return lines.join('\n');
+}
+
+function ensureCodexConfig(input: ContainerInput): void {
+  const codexDir = '/home/node/.codex';
+  fs.mkdirSync(codexDir, { recursive: true });
+  const configPath = path.join(codexDir, 'config.toml');
+
+  const approvalPolicy = input.providerConfig?.codex?.approvalPolicy ?? 'auto';
+  let approvalValue = 'on-request';
+  let sandboxMode = 'workspace-write';
+
+  if (approvalPolicy === 'readonly') {
+    approvalValue = 'never';
+    sandboxMode = 'read-only';
+  } else if (approvalPolicy === 'full') {
+    approvalValue = 'never';
+    sandboxMode = 'danger-full-access';
+  }
+
+  const config = [
+    `approval_policy = "${approvalValue}"`,
+    `sandbox_mode = "${sandboxMode}"`,
+    '',
+  ].join('\n');
+
+  try {
+    let existing = '';
+    if (fs.existsSync(configPath)) {
+      existing = fs.readFileSync(configPath, 'utf-8');
+    }
+
+    const upsert = (contents: string, key: string, value: string): string => {
+      const re = new RegExp(`^\\s*${key}\\s*=\\s*".*"\\s*$`, 'm');
+      if (re.test(contents)) {
+        return contents.replace(re, `${key} = "${value}"`);
+      }
+      const trimmed = contents.replace(/\s*$/, '');
+      const suffix = trimmed.length ? '\n' : '';
+      return `${trimmed}${suffix}${key} = "${value}"\n`;
+    };
+
+    const updated = upsert(upsert(existing, 'approval_policy', approvalValue), 'sandbox_mode', sandboxMode);
+    if (updated !== existing) {
+      fs.writeFileSync(configPath, updated);
+    }
+  } catch (err) {
+    log(`Failed to update Codex config: ${err instanceof Error ? err.message : String(err)}`);
+    fs.writeFileSync(configPath, config);
+  }
+}
+
+function validateCodexAuth(input: ContainerInput): string | null {
+  const authMethod = input.providerConfig?.codex?.authMethod;
+  const authPath = '/home/node/.codex/auth.json';
+  const hasAuthFile = fs.existsSync(authPath);
+  const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
+
+  if (authMethod === 'chatgpt') {
+    if (!hasAuthFile) {
+      return 'Codex auth.json not found. Run `codex login` on the host and copy ~/.codex/auth.json to data/codex/<group>/.codex/auth.json.';
+    }
+    return null;
+  }
+
+  if (authMethod === 'api_key') {
+    if (!apiKey) {
+      return 'OPENAI_API_KEY or CODEX_API_KEY is missing. Add one to .env to use Codex API key auth.';
+    }
+    return null;
+  }
+
+  if (!hasAuthFile && !apiKey) {
+    return 'Codex authentication not found. Run `codex login` or set OPENAI_API_KEY in .env.';
+  }
+
+  return null;
+}
+
+async function runCodexExec(input: ContainerInput, prompt: string): Promise<ContainerOutput> {
+  const authError = validateCodexAuth(input);
+  if (authError) {
+    return { status: 'error', result: null, error: authError };
+  }
+
+  ensureCodexConfig(input);
+
+  const prelude = buildCodexPrelude(input);
+  const fullPrompt = `${prelude}\n\n${prompt}`;
+  const useStdin = fullPrompt.length > 8000;
+
+  return new Promise((resolve) => {
+    const child = spawn('codex', useStdin ? ['exec'] : ['exec', fullPrompt], {
+      cwd: '/workspace/group',
+      env: process.env,
+      stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    if (useStdin) {
+      child.stdin.write(fullPrompt);
+      child.stdin.end();
+    }
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve({
+          status: 'error',
+          result: null,
+          error: `Codex exited with code ${code}: ${stderr.trim().slice(-500)}`,
+        });
+        return;
+      }
+      resolve({
+        status: 'success',
+        result: stdout.trim() || null,
+      });
+    });
+
+    child.on('error', (err) => {
+      resolve({
+        status: 'error',
+        result: null,
+        error: `Failed to start Codex: ${err.message}`,
+      });
+    });
+  });
+}
+
 async function main(): Promise<void> {
   let input: ContainerInput;
 
@@ -216,23 +440,40 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const ipcMcp = createIpcMcp({
-    chatJid: input.chatJid,
-    groupFolder: input.groupFolder,
-    isMain: input.isMain
-  });
-
   let result: string | null = null;
   let newSessionId: string | undefined;
+  const provider = input.provider || 'claude';
 
   // Add context for scheduled tasks
   let prompt = input.prompt;
   if (input.isScheduledTask) {
-    prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__nanoclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
+    if (provider === 'codex') {
+      prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. To reply, write a JSON file to /workspace/ipc/messages.]\n\n${input.prompt}`;
+    } else {
+      prompt = `[SCHEDULED TASK - You are running automatically, not in response to a user message. Use mcp__nanoclaw__send_message if needed to communicate with the user.]\n\n${input.prompt}`;
+    }
   }
 
   try {
-    log('Starting agent...');
+    log(`Starting agent (${provider})...`);
+
+    if (provider === 'codex') {
+      const output = await runCodexExec(input, prompt);
+      writeOutput({
+        status: output.status,
+        result: output.result,
+        error: output.error,
+      });
+      return;
+    }
+
+    ensureClaudeGlobalMemoryFile(input);
+
+    const ipcMcp = createIpcMcp({
+      chatJid: input.chatJid,
+      groupFolder: input.groupFolder,
+      isMain: input.isMain
+    });
 
     for await (const message of query({
       prompt,
